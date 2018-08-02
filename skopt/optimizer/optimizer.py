@@ -27,6 +27,14 @@ from ..utils import is_2Dlistlike
 from ..utils import normalize_dimensions
 
 
+# Need to focus on _ask() function
+# Need to focus on using qEI instead of EI
+# Need to look into "values" attribute outputted by Gaussian acq function in _ask()
+
+def qei_approx():
+
+    return
+
 class Optimizer(object):
     """Run bayesian optimisation loop.
 
@@ -149,7 +157,7 @@ class Optimizer(object):
         self.acq_func = acq_func
         self.acq_func_kwargs = acq_func_kwargs
 
-        allowed_acq_funcs = ["gp_hedge", "EI", "LCB", "PI", "EIps", "PIps"]
+        allowed_acq_funcs = ["gp_hedge", "EI", "LCB", "PI", "EIps", "PIps", "qEI"]
         if self.acq_func not in allowed_acq_funcs:
             raise ValueError("expected acq_func to be in %s, got %s" %
                              (",".join(allowed_acq_funcs), self.acq_func))
@@ -321,7 +329,7 @@ class Optimizer(object):
         if n_points is None:
             return self._ask()
 
-        supported_strategies = ["cl_min", "cl_mean", "cl_max"]
+        supported_strategies = ["cl_min", "cl_mean", "cl_max", "qei_approx"]
 
         if not (isinstance(n_points, int) and n_points > 0):
             raise ValueError(
@@ -362,7 +370,7 @@ class Optimizer(object):
             else:
                 y_lie = np.max(opt.yi) if opt.yi else 0.0  # CL-max lie
                 t_lie = np.max(ti) if ti is not None else log(sys.float_info.max)
-
+                
             # Lie to the optimizer.
             if "ps" in self.acq_func:
                 # Use `_tell()` instead of `tell()` to prevent repeated
@@ -492,7 +500,7 @@ class Optimizer(object):
             # even with BFGS as optimizer we want to sample a large number
             # of points and then pick the best ones as starting points
             X = self.space.transform(self.space.rvs(
-                n_samples=self.n_points, random_state=self.rng))
+                n_samples=self.n_points, random_state=self.rng)) # How do you get X values ; How do you define grid?
 
             self.next_xs_ = []
             for cand_acq_func in self.cand_acq_funcs_:
@@ -549,6 +557,7 @@ class Optimizer(object):
             self._next_x = self.space.inverse_transform(
                 next_x.reshape((1, -1)))[0]
 
+        self.Xspace = X
         # Pack results
         return create_result(self.Xi, self.yi, self.space, self.rng,
                              models=self.models)

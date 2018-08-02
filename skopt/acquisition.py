@@ -3,6 +3,17 @@ import warnings
 
 from scipy.stats import norm
 
+from rpy2.robjects.packages import STAP
+with open('qEI_call.r', 'r') as f:
+    string = f.read()
+qEI = STAP(string, "qEI_call")
+import rpy2.robjects.numpy2ri
+rpy2.robjects.numpy2ri.activate()
+from rpy2.robjects.packages import importr
+import rpy2.robjects.numpy2ri as rpyn
+rcpp = importr("Rcpp")
+rcpp.sourceCpp('qEI.cpp')
+
 
 def gaussian_acquisition_1D(X, model, y_opt=None, acq_func="LCB",
                             acq_func_kwargs=None, return_grad=True):
@@ -85,6 +96,58 @@ def _gaussian_acquisition(X, model, y_opt=None, acq_func="LCB",
     if return_grad:
         return acq_vals, acq_grad
     return acq_vals
+
+
+def approx_qei(X, model, y_opt,
+               num_sampled_points = 5,
+               num_batches_eval = 400,
+               strategy_batch_selection = 'random',
+               return_grad = False):
+    """
+    Use Mickael Binois approximation to qEI function
+    This is used to calculate qEI score for batches 
+    
+    Parameters
+    ----------
+    * `X` [array-like, shape=(n_samples, n_features)]:
+        Values where the acquisition function should be computed.
+
+    * `model` [sklearn estimator that implements predict with ``return_std``]:
+        The fit estimator that approximates the function through the
+        method ``predict``.
+        It should have a ``return_std`` parameter that returns the standard
+        deviation.
+        
+     * `return_grad`: [boolean, optional]:
+        Whether or not to return the grad. Implemented only for the case where
+        ``X`` is a single sample.
+    
+     Returns
+    -------
+    * `values`: [array-like, shape=(len(num_batches_eval),)]:
+        qEI values for each batch
+    """
+    batches = []
+    cc_vec = np.zeros(num_batches_eval)
+    # Batch preparation
+    for i in range(num_batches_eval):   
+        if strategy_batch_selection == 'random':
+            rel_ind = np.random.choice(X.shape[0], num_sampled_points, replace=False)
+            b = X[rel_ind,:]
+        else:
+            RuntimeError ("No such sampling strategy exists ..")
+        batches.append(b)
+        mean, covar = model.predict(b, return_cov=True)
+        cc = qEI.qEI_approx(mean, covar, y_opt)
+        cc_num = rpyn.ri2py(cc)
+        cc_vec[i] = cc_num
+    max_qEI_val = np.max(cc_vec)
+    max_qEI_val_ind = np.argmax(cc_vec)
+    best_batch = batches[max_qEI_val_ind]
+    
+    return best_batch, batches, cc_vec, max_qEI_val
+    
+    
 
 
 def gaussian_lcb(X, model, kappa=1.96, return_grad=False):
