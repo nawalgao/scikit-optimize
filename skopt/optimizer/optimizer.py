@@ -353,20 +353,21 @@ class Optimizer(object):
         if (n_points, strategy) in self.cache_:
             return self.cache_[(n_points, strategy)]
 
-        # Copy of the optimizer is made in order to manage the
-        # deletion of points with "lie" objective (the copy of
-        # oiptimizer is simply discarded)
-        opt = self.copy(random_state=self.rng.randint(0,
-                                                      np.iinfo(np.int32).max))
-        
-        if strategy == 'qei_approx':
-            #TODO
+        if self.acq_func == 'qEI':
             print ('This is going to find the maximum of the concerned objective,',
-                   'unlike scikit optimize. Scikit optimize finds the minimum of objective function')
-            
-            
+                   'unlike scikit optimize.')
+            print (' Scikit optimize finds the minimum of objective function.')
+            if n_points is not None:
+                raise ValueError("We dont need to give n_points as we have already defined it"
+                           " while defining Optimizer with qEI acq function")
             
         else:
+            
+            # Copy of the optimizer is made in order to manage the
+            # deletion of points with "lie" objective (the copy of
+            # oiptimizer is simply discarded)
+            opt = self.copy(random_state=self.rng.randint(0,
+                                                          np.iinfo(np.int32).max))
             X = []
             for i in range(n_points):
                 x = opt.ask()
@@ -533,7 +534,7 @@ class Optimizer(object):
                                num_sampled_points = num_sampled_points,
                                num_batches_eval = num_batches_eval,
                                strategy_batch_selection = strategy_batch_selection)
-                    self.best_batch = best_batch
+                    self.best_batch = self.space.inverse_transform(best_batch)
                     self.batches = batches
                     self.cc_vec = cc_vec
                     self.max_qEI_val = max_qEI_val
