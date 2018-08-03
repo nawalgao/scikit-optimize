@@ -13,7 +13,7 @@ from sklearn.externals.joblib import Parallel, delayed
 from sklearn.multioutput import MultiOutputRegressor
 from sklearn.utils import check_random_state
 
-from ..acquisition import _gaussian_acquisition
+from ..acquisition import _gaussian_acquisition, approx_qei
 from ..acquisition import gaussian_acquisition_1D
 from ..learning import GaussianProcessRegressor
 from ..space import Categorical
@@ -161,6 +161,12 @@ class Optimizer(object):
         if self.acq_func not in allowed_acq_funcs:
             raise ValueError("expected acq_func to be in %s, got %s" %
                              (",".join(allowed_acq_funcs), self.acq_func))
+        
+        if self.acq_func == 'qEI':
+            print ('qEI aquisition function (parallel BGO) is still under development')
+            print('-'*40)
+            print ('Right now, it can only be used with sampling acq_optimizer')
+    
 
         # treat hedging method separately
         if self.acq_func == "gp_hedge":
@@ -352,32 +358,40 @@ class Optimizer(object):
         # oiptimizer is simply discarded)
         opt = self.copy(random_state=self.rng.randint(0,
                                                       np.iinfo(np.int32).max))
-
-        X = []
-        for i in range(n_points):
-            x = opt.ask()
-            X.append(x)
-
-            ti_available = "ps" in self.acq_func and len(opt.yi) > 0
-            ti = [t for (_, t) in opt.yi] if ti_available else None
-
-            if strategy == "cl_min":
-                y_lie = np.min(opt.yi) if opt.yi else 0.0  # CL-min lie
-                t_lie = np.min(ti) if ti is not None else log(sys.float_info.max)
-            elif strategy == "cl_mean":
-                y_lie = np.mean(opt.yi) if opt.yi else 0.0  # CL-mean lie
-                t_lie = np.mean(ti) if ti is not None else log(sys.float_info.max)
-            else:
-                y_lie = np.max(opt.yi) if opt.yi else 0.0  # CL-max lie
-                t_lie = np.max(ti) if ti is not None else log(sys.float_info.max)
-                
-            # Lie to the optimizer.
-            if "ps" in self.acq_func:
-                # Use `_tell()` instead of `tell()` to prevent repeated
-                # log transformations of the computation times.
-                opt._tell(x, (y_lie, t_lie))
-            else:
-                opt._tell(x, y_lie)
+        
+        if strategy == 'qei_approx':
+            #TODO
+            print ('This is going to find the maximum of the concerned objective,',
+                   'unlike scikit optimize. Scikit optimize finds the minimum of objective function')
+            
+            
+            
+        else:
+            X = []
+            for i in range(n_points):
+                x = opt.ask()
+                X.append(x)
+    
+                ti_available = "ps" in self.acq_func and len(opt.yi) > 0
+                ti = [t for (_, t) in opt.yi] if ti_available else None
+    
+                if strategy == "cl_min":
+                    y_lie = np.min(opt.yi) if opt.yi else 0.0  # CL-min lie
+                    t_lie = np.min(ti) if ti is not None else log(sys.float_info.max)
+                elif strategy == "cl_mean":
+                    y_lie = np.mean(opt.yi) if opt.yi else 0.0  # CL-mean lie
+                    t_lie = np.mean(ti) if ti is not None else log(sys.float_info.max)
+                else:
+                    y_lie = np.max(opt.yi) if opt.yi else 0.0  # CL-max lie
+                    t_lie = np.max(ti) if ti is not None else log(sys.float_info.max)
+                    
+                # Lie to the optimizer.
+                if "ps" in self.acq_func:
+                    # Use `_tell()` instead of `tell()` to prevent repeated
+                    # log transformations of the computation times.
+                    opt._tell(x, (y_lie, t_lie))
+                else:
+                    opt._tell(x, y_lie)
 
         self.cache_ = {(n_points, strategy): X}  # cache_ the result
 
@@ -399,16 +413,19 @@ class Optimizer(object):
             if not self.models:
                 raise RuntimeError("Random evaluations exhausted and no "
                                    "model has been fit.")
+            if self.acq_func == 'qEI':
+                return self.best_batch, self.batches, self.cc_vec
+            
+            else:
+                next_x = self._next_x
+                min_delta_x = min([self.space.distance(next_x, xi)
+                                   for xi in self.Xi])
+                if abs(min_delta_x) <= 1e-8:
+                    warnings.warn("The objective has been evaluated "
+                                  "at this point before.")
 
-            next_x = self._next_x
-            min_delta_x = min([self.space.distance(next_x, xi)
-                               for xi in self.Xi])
-            if abs(min_delta_x) <= 1e-8:
-                warnings.warn("The objective has been evaluated "
-                              "at this point before.")
-
-            # return point computed from last call to tell()
-            return next_x
+                # return point computed from last call to tell()
+                return next_x
 
     def tell(self, x, y, fit=True):
         """Record an observation (or several) of the objective function.
@@ -503,59 +520,77 @@ class Optimizer(object):
                 n_samples=self.n_points, random_state=self.rng)) # How do you get X values ; How do you define grid?
 
             self.next_xs_ = []
-            for cand_acq_func in self.cand_acq_funcs_:
-                values = _gaussian_acquisition(
-                    X=X, model=est, y_opt=np.min(self.yi),
-                    acq_func=cand_acq_func,
-                    acq_func_kwargs=self.acq_func_kwargs)
-                # Find the minimum of the acquisition function by randomly
-                # sampling points from the space
-                if self.acq_optimizer == "sampling":
-                    next_x = X[np.argmin(values)]
-
-                # Use BFGS to find the mimimum of the acquisition function, the
-                # minimization starts from `n_restarts_optimizer` different
-                # points and the best minimum is used
-                elif self.acq_optimizer == "lbfgs":
-                    x0 = X[np.argsort(values)[:self.n_restarts_optimizer]]
-
-                    with warnings.catch_warnings():
-                        warnings.simplefilter("ignore")
-                        results = Parallel(n_jobs=self.n_jobs)(
-                            delayed(fmin_l_bfgs_b)(
-                                gaussian_acquisition_1D, x,
-                                args=(est, np.min(self.yi), cand_acq_func,
-                                      self.acq_func_kwargs),
-                                bounds=self.space.transformed_bounds,
-                                approx_grad=False,
-                                maxiter=20)
-                            for x in x0)
-
-                    cand_xs = np.array([r[0] for r in results])
-                    cand_acqs = np.array([r[1] for r in results])
-                    next_x = cand_xs[np.argmin(cand_acqs)]
-
-                # lbfgs should handle this but just in case there are
-                # precision errors.
-                if not self.space.is_categorical:
-                    next_x = np.clip(
-                        next_x, transformed_bounds[:, 0],
-                        transformed_bounds[:, 1])
-                self.next_xs_.append(next_x)
-
-            if self.acq_func == "gp_hedge":
-                logits = np.array(self.gains_)
-                logits -= np.max(logits)
-                exp_logits = np.exp(self.eta * logits)
-                probs = exp_logits / np.sum(exp_logits)
-                next_x = self.next_xs_[np.argmax(self.rng.multinomial(1,
-                                                                      probs))]
-            else:
-                next_x = self.next_xs_[0]
-
-            # note the need for [0] at the end
-            self._next_x = self.space.inverse_transform(
-                next_x.reshape((1, -1)))[0]
+            
+            if self.acq_func == 'qEI':
+                    print ('we are here :: qEI')
+                    num_sampled_points = self.acq_func_kwargs['num_sampled_points']
+                    num_batches_eval = self.acq_func_kwargs['num_batches_eval']
+                    strategy_batch_selection = self.acq_func_kwargs['strategy_batch_selection']
+                    
+                    (best_batch, batches,
+                     cc_vec, max_qEI_val) = approx_qei(X = X, model = est,
+                                        maxima = np.max(self.yi),
+                               num_sampled_points = num_sampled_points,
+                               num_batches_eval = num_batches_eval,
+                               strategy_batch_selection = strategy_batch_selection)
+                    self.best_batch = best_batch
+                    self.batches = batches
+                    self.cc_vec = cc_vec
+                    self.max_qEI_val = max_qEI_val
+            else:    
+                for cand_acq_func in self.cand_acq_funcs_:
+                    values = _gaussian_acquisition(
+                        X=X, model=est, y_opt=np.min(self.yi),
+                        acq_func=cand_acq_func,
+                        acq_func_kwargs=self.acq_func_kwargs)
+                    # Find the minimum of the acquisition function by randomly
+                    # sampling points from the space
+                    if self.acq_optimizer == "sampling":
+                        next_x = X[np.argmin(values)]
+    
+                    # Use BFGS to find the mimimum of the acquisition function, the
+                    # minimization starts from `n_restarts_optimizer` different
+                    # points and the best minimum is used
+                    elif self.acq_optimizer == "lbfgs":
+                        x0 = X[np.argsort(values)[:self.n_restarts_optimizer]]
+    
+                        with warnings.catch_warnings():
+                            warnings.simplefilter("ignore")
+                            results = Parallel(n_jobs=self.n_jobs)(
+                                delayed(fmin_l_bfgs_b)(
+                                    gaussian_acquisition_1D, x,
+                                    args=(est, np.min(self.yi), cand_acq_func,
+                                          self.acq_func_kwargs),
+                                    bounds=self.space.transformed_bounds,
+                                    approx_grad=False,
+                                    maxiter=20)
+                                for x in x0)
+    
+                        cand_xs = np.array([r[0] for r in results])
+                        cand_acqs = np.array([r[1] for r in results])
+                        next_x = cand_xs[np.argmin(cand_acqs)]
+    
+                    # lbfgs should handle this but just in case there are
+                    # precision errors.
+                    if not self.space.is_categorical:
+                        next_x = np.clip(
+                            next_x, transformed_bounds[:, 0],
+                            transformed_bounds[:, 1])
+                    self.next_xs_.append(next_x)
+    
+                if self.acq_func == "gp_hedge":
+                    logits = np.array(self.gains_)
+                    logits -= np.max(logits)
+                    exp_logits = np.exp(self.eta * logits)
+                    probs = exp_logits / np.sum(exp_logits)
+                    next_x = self.next_xs_[np.argmax(self.rng.multinomial(1,
+                                                                          probs))]
+                else:
+                    next_x = self.next_xs_[0]
+    
+                # note the need for [0] at the end
+                self._next_x = self.space.inverse_transform(
+                    next_x.reshape((1, -1)))[0]
 
         self.Xspace = X
         # Pack results

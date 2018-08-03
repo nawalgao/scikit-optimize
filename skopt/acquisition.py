@@ -56,7 +56,7 @@ def _gaussian_acquisition(X, model, y_opt=None, acq_func="LCB",
             acq_vals, acq_grad = func_and_grad
         else:
             acq_vals = func_and_grad
-
+    
     elif acq_func in ["EI", "PI", "EIps", "PIps"]:
         if acq_func in ["EI", "EIps"]:
             func_and_grad = gaussian_ei(X, model, y_opt, xi, return_grad)
@@ -98,11 +98,10 @@ def _gaussian_acquisition(X, model, y_opt=None, acq_func="LCB",
     return acq_vals
 
 
-def approx_qei(X, model, y_opt,
+def approx_qei(X, model, maxima,
                num_sampled_points = 5,
                num_batches_eval = 400,
-               strategy_batch_selection = 'random',
-               return_grad = False):
+               strategy_batch_selection = 'random'):
     """
     Use Mickael Binois approximation to qEI function
     This is used to calculate qEI score for batches 
@@ -135,10 +134,10 @@ def approx_qei(X, model, y_opt,
             rel_ind = np.random.choice(X.shape[0], num_sampled_points, replace=False)
             b = X[rel_ind,:]
         else:
-            RuntimeError ("No such sampling strategy exists ..")
+            ValueError ("No such sampling strategy exists ..")
         batches.append(b)
         mean, covar = model.predict(b, return_cov=True)
-        cc = qEI.qEI_approx(mean, covar, y_opt)
+        cc = qEI.qEI_approx(mean, covar, maxima)
         cc_num = rpyn.ri2py(cc)
         cc_vec[i] = cc_num
     max_qEI_val = np.max(cc_vec)
