@@ -98,7 +98,7 @@ def _gaussian_acquisition(X, model, y_opt=None, acq_func="LCB",
     return acq_vals
 
 
-def approx_qei(X, model, maxima,
+def approx_qei(X, model, maxima, x_pending = None,
                num_sampled_points = 5,
                num_batches_eval = 400,
                strategy_batch_selection = 'random'):
@@ -126,6 +126,10 @@ def approx_qei(X, model, maxima,
     * `values`: [array-like, shape=(len(num_batches_eval),)]:
         qEI values for each batch
     """
+    # Converting x_pending list to numpy array
+    if x_pending is not None:  
+        x_pending = np.array(x_pending)
+    
     batches = []
     cc_vec = np.zeros(num_batches_eval)
     # Batch preparation
@@ -133,6 +137,8 @@ def approx_qei(X, model, maxima,
         if strategy_batch_selection == 'random':
             rel_ind = np.random.choice(X.shape[0], num_sampled_points, replace=False)
             b = X[rel_ind,:]
+            if x_pending is not None:
+                b = np.vstack([x_pending, b])
         else:
             ValueError ("No such sampling strategy exists ..")
         batches.append(b)

@@ -31,9 +31,6 @@ from ..utils import normalize_dimensions
 # Need to focus on using qEI instead of EI
 # Need to look into "values" attribute outputted by Gaussian acq function in _ask()
 
-def qei_approx():
-
-    return
 
 class Optimizer(object):
     """Run bayesian optimisation loop.
@@ -301,7 +298,8 @@ class Optimizer(object):
 
         return optimizer
 
-    def ask(self, n_points=None, strategy="cl_min"):
+    def ask(self, n_points=None, strategy="cl_min",
+            additional_acq_func_kwargs = None):
         """Query point or multiple points at which objective should be evaluated.
 
         * `n_points` [int or None, default=None]:
@@ -330,11 +328,13 @@ class Optimizer(object):
                asked from copy, it is also told to the copy with fake
                objective and so on. The type of lie defines different
                flavours of `cl_x` strategies.
+        * `additional_acq_func_kwargs` [dict, default = 'None']:
+            Addtional arguments required for qEI aquisition function
 
         """
         if n_points is None:
-            return self._ask()
-
+            return self._ask(additional_acq_func_kwargs)
+        
         supported_strategies = ["cl_min", "cl_mean", "cl_max", "qei_approx"]
 
         if not (isinstance(n_points, int) and n_points > 0):
@@ -356,11 +356,10 @@ class Optimizer(object):
         if self.acq_func == 'qEI':
             print ('This is going to find the maximum of the concerned objective,',
                    'unlike scikit optimize.')
-            print (' Scikit optimize finds the minimum of objective function.')
-            if n_points is not None:
-                raise ValueError("We dont need to give n_points as we have already defined it"
-                           " while defining Optimizer with qEI acq function")
+            print ('Scikit optimize finds the minimum of objective function.')
             
+            
+            return self._ask(additional_acq_func_kwargs)
         else:
             
             # Copy of the optimizer is made in order to manage the
@@ -398,12 +397,14 @@ class Optimizer(object):
 
         return X
 
-    def _ask(self):
+    def _ask(self, additional_acq_func_kwargs = None):
         """Suggest next point at which to evaluate the objective.
 
         Return a random point while not at least `n_initial_points`
         observations have been `tell`ed, after that `base_estimator` is used
         to determine the next point.
+         * `additional_acq_func_kwargs` [dict, default = 'None']:
+            Addtional arguments required for qEI aquisition function
         """
         if self._n_initial_points > 0 or self.base_estimator_ is None:
             # this will not make a copy of `self.rng` and hence keep advancing
@@ -415,7 +416,33 @@ class Optimizer(object):
                 raise RuntimeError("Random evaluations exhausted and no "
                                    "model has been fit.")
             if self.acq_func == 'qEI':
-                return self.best_batch, self.batches, self.cc_vec
+                if additional_acq_func_kwargs is None:
+                    raise ValueError("qEI acquisition function needs extra arguments.")
+                num_sampled_points = additional_acq_func_kwargs['num_sampled_points']
+                num_batches_eval = additional_acq_func_kwargs['num_batches_eval']
+                strategy_batch_selection = additional_acq_func_kwargs['strategy_batch_selection']
+                (best_batch, batches,
+                 cc_vec, max_qEI_val) = approx_qei(X = self.Xspace, 
+                                    model = self.est,
+                                    maxima = np.max(self.yi),
+                                    x_pending = self.x_pending,
+                                    num_sampled_points = num_sampled_points,
+                                    num_batches_eval = num_batches_eval,
+                                    strategy_batch_selection = strategy_batch_selection)
+                #self.best_batch = self.space.inverse_transform(best_batch)
+                #self.bb = self.space.inverse_transform(best_batch)
+                self.best_batch = best_batch
+                self.batches = batches
+                self.cc_vec = cc_vec
+                self.max_qEI_val = max_qEI_val
+                
+                if self.x_pending is not None:
+                    print ('we are here..abcd')
+                    self.points_to_eval = self.best_batch[self.x_pending.shape[0]:,:] 
+                else:
+                    self.points_to_eval = self.best_batch
+            
+                return self.space.inverse_transform(self.points_to_eval)
             
             else:
                 next_x = self._next_x
@@ -428,7 +455,7 @@ class Optimizer(object):
                 # return point computed from last call to tell()
                 return next_x
 
-    def tell(self, x, y, fit=True):
+    def tell(self, x, y, x_pending = None, fit=True):
         """Record an observation (or several) of the objective function.
 
         Provide values of the objective function at points suggested by `ask()`
@@ -455,6 +482,15 @@ class Optimizer(object):
             only be fitted after `n_initial_points` points have been told to
             the optimizer irrespective of the value of `fit`.
         """
+        if x_pending is not None:
+            if self.acq_func == 'qEI':
+                print ('Good to go, do nothing')
+                x_pending = self.space.transform(x_pending)
+                check_x_in_space(x_pending, self.space)
+            else:
+                raise ValueError("Currently tell() method can only handle",
+                                 "pending evals for qEI acquisition function")
+        
         check_x_in_space(x, self.space)
         self._check_y_is_valid(x, y)
 
@@ -466,14 +502,23 @@ class Optimizer(object):
                 y = list(y)
                 y[1] = log(y[1])
 
-        return self._tell(x, y, fit=fit)
+        return self._tell(x, y, x_pending, fit=fit)
+    
 
-    def _tell(self, x, y, fit=True):
+#        """
+#        Tell function which will also take into account the pending evals
+#        -----
+#        Right now, only compatible with qEI
+#        """
+
+    def _tell(self, x, y, x_pending = None, fit=True):
         """Perform the actual work of incorporating one or more new points.
         See `tell()` for the full description.
 
         This method exists to give access to the internals of adding points
         by side stepping all input validation and transformation."""
+        
+        self.x_pending = x_pending
 
         if "ps" in self.acq_func:
             if is_2Dlistlike(x):
@@ -524,20 +569,24 @@ class Optimizer(object):
             
             if self.acq_func == 'qEI':
                     print ('we are here :: qEI')
-                    num_sampled_points = self.acq_func_kwargs['num_sampled_points']
-                    num_batches_eval = self.acq_func_kwargs['num_batches_eval']
-                    strategy_batch_selection = self.acq_func_kwargs['strategy_batch_selection']
-                    
-                    (best_batch, batches,
-                     cc_vec, max_qEI_val) = approx_qei(X = X, model = est,
-                                        maxima = np.max(self.yi),
-                               num_sampled_points = num_sampled_points,
-                               num_batches_eval = num_batches_eval,
-                               strategy_batch_selection = strategy_batch_selection)
-                    self.best_batch = self.space.inverse_transform(best_batch)
-                    self.batches = batches
-                    self.cc_vec = cc_vec
-                    self.max_qEI_val = max_qEI_val
+                    print ('When tell() is called with qEI aquisition function',
+                           ',we are just fitting the model and nothing more.')
+#                    num_sampled_points = self.acq_func_kwargs['num_sampled_points']
+#                    num_batches_eval = self.acq_func_kwargs['num_batches_eval']
+#                    strategy_batch_selection = self.acq_func_kwargs['strategy_batch_selection']                    
+#                    (best_batch, batches,
+#                     cc_vec, max_qEI_val) = approx_qei(X = X, model = est,
+#                                        maxima = np.max(self.yi),
+#                                        x_pending = x_pending,
+#                                        num_sampled_points = num_sampled_points,
+#                                        num_batches_eval = num_batches_eval,
+#                                        strategy_batch_selection = strategy_batch_selection)
+#                    
+#                    self.best_batch = self.space.inverse_transform(best_batch)
+#                    self.best_batch = best_batch
+#                    self.batches = batches
+#                    self.cc_vec = cc_vec
+#                    self.max_qEI_val = max_qEI_val
             else:    
                 for cand_acq_func in self.cand_acq_funcs_:
                     values = _gaussian_acquisition(
@@ -592,8 +641,13 @@ class Optimizer(object):
                 # note the need for [0] at the end
                 self._next_x = self.space.inverse_transform(
                     next_x.reshape((1, -1)))[0]
-
+                
+                
+        # Defining attributes for qEI
         self.Xspace = X
+        self.est = est
+        self.x_pending = x_pending
+        
         # Pack results
         return create_result(self.Xi, self.yi, self.space, self.rng,
                              models=self.models)
