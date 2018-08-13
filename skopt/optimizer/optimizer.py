@@ -13,9 +13,11 @@ from sklearn.externals.joblib import Parallel, delayed
 from sklearn.multioutput import MultiOutputRegressor
 from sklearn.utils import check_random_state
 
-from ..acquisition import _gaussian_acquisition, approx_qei
+from ..acquisition import _gaussian_acquisition
+from ..acquisition import approx_qei
 from ..acquisition import gaussian_acquisition_1D
 from ..learning import GaussianProcessRegressor
+from ..learning import LastLayerBayesianDeepNetRegressor
 from ..space import Categorical
 from ..space import Space
 from ..utils import check_x_in_space
@@ -56,11 +58,11 @@ class Optimizer(object):
         - an instance of a `Dimension` object (`Real`, `Integer` or
           `Categorical`).
 
-    * `base_estimator` ["GP", "RF", "ET", "GBRT" or sklearn regressor, default="GP"]:
+    * `base_estimator` ["GP", "RF", "ET", "GBRT", "LLBNN" or sklearn regressor, default="GP"]:
         Should inherit from `sklearn.base.RegressorMixin`.
         In addition the `predict` method, should have an optional `return_std`
         argument, which returns `std(Y | x)`` along with `E[Y | x]`.
-        If base_estimator is one of ["GP", "RF", "ET", "GBRT"], a default
+        If base_estimator is one of ["GP", "RF", "ET", "GBRT", "LLBNN"], a default
         surrogate model of the corresponding type is used corresponding to what
         is used in the minimize functions.
 
@@ -96,6 +98,9 @@ class Optimizer(object):
         - `"PIps"` for negated probability of improvement per second. The
           return type of the objective function is assumed to be similar to
           that of `"EIps
+        - `"qEI"` : Michael approximation for qEI (uses R code as of now)
+        - `"RuiEI"` : Paralllel EI implemented in Rui Shu Github code 
+        - `"IntegratedEI"` : Integrated acquisition function
 
     * `acq_optimizer` [string, `"sampling"` or `"lbfgs"`, default=`"auto"`]:
         Method to minimize the acquistion function. The fit model
@@ -154,13 +159,20 @@ class Optimizer(object):
         self.acq_func = acq_func
         self.acq_func_kwargs = acq_func_kwargs
 
-        allowed_acq_funcs = ["gp_hedge", "EI", "LCB", "PI", "EIps", "PIps", "qEI"]
+        allowed_acq_funcs = ["gp_hedge", "EI", "LCB", "PI", "EIps", "PIps", "qEI", 'RuiEI']
         if self.acq_func not in allowed_acq_funcs:
             raise ValueError("expected acq_func to be in %s, got %s" %
                              (",".join(allowed_acq_funcs), self.acq_func))
         
         if self.acq_func == 'qEI':
+            if base_estimator != 'gp':
+                raise ValueError('Right now, only GP estimator is supported with qEI')
             print ('qEI aquisition function (parallel BGO) is still under development')
+            print('-'*40)
+            print ('Right now, it can only be used with sampling acq_optimizer')
+        
+        if self.acq_func == 'RuiEI':
+            print ('RuiEI aquisition function (parallel BGO) is still under development')
             print('-'*40)
             print ('Right now, it can only be used with sampling acq_optimizer')
     
@@ -247,6 +259,11 @@ class Optimizer(object):
         # normalize space if GP regressor
         if isinstance(self.base_estimator_, GaussianProcessRegressor):
             dimensions = normalize_dimensions(dimensions)
+        
+        if isinstance(self.base_estimator_, LastLayerBayesianDeepNetRegressor):
+            dimensions = normalize_dimensions(dimensions)
+        
+        
         self.space = Space(dimensions)
 
         # record categorical and non-categorical indices
@@ -335,7 +352,7 @@ class Optimizer(object):
         if n_points is None:
             return self._ask(additional_acq_func_kwargs)
         
-        supported_strategies = ["cl_min", "cl_mean", "cl_max", "qei_approx"]
+        supported_strategies = ["cl_min", "cl_mean", "cl_max", "qei_approx", "RuiEI"]
 
         if not (isinstance(n_points, int) and n_points > 0):
             raise ValueError(
@@ -358,10 +375,17 @@ class Optimizer(object):
                    'unlike scikit optimize.')
             print ('Scikit optimize finds the minimum of objective function.')
             
-            
             return self._ask(additional_acq_func_kwargs)
-        else:
             
+        elif self.acq_func == 'RuiEI':
+            print ('This is going to find the maximum of the concerned objective,',
+                   'unlike scikit optimize.')
+            print ('Scikit optimize finds the minimum of objective function.')
+              
+            return self._ask(additional_acq_func_kwargs)
+        
+        else:
+      
             # Copy of the optimizer is made in order to manage the
             # deletion of points with "lie" objective (the copy of
             # oiptimizer is simply discarded)
@@ -437,7 +461,6 @@ class Optimizer(object):
                 self.max_qEI_val = max_qEI_val
                 
                 if self.x_pending is not None:
-                    print ('we are here..abcd')
                     self.points_to_eval = self.best_batch[self.x_pending.shape[0]:,:] 
                 else:
                     self.points_to_eval = self.best_batch
@@ -571,23 +594,12 @@ class Optimizer(object):
                     print ('we are here :: qEI')
                     print ('When tell() is called with qEI aquisition function',
                            ',we are just fitting the model and nothing more.')
-#                    num_sampled_points = self.acq_func_kwargs['num_sampled_points']
-#                    num_batches_eval = self.acq_func_kwargs['num_batches_eval']
-#                    strategy_batch_selection = self.acq_func_kwargs['strategy_batch_selection']                    
-#                    (best_batch, batches,
-#                     cc_vec, max_qEI_val) = approx_qei(X = X, model = est,
-#                                        maxima = np.max(self.yi),
-#                                        x_pending = x_pending,
-#                                        num_sampled_points = num_sampled_points,
-#                                        num_batches_eval = num_batches_eval,
-#                                        strategy_batch_selection = strategy_batch_selection)
-#                    
-#                    self.best_batch = self.space.inverse_transform(best_batch)
-#                    self.best_batch = best_batch
-#                    self.batches = batches
-#                    self.cc_vec = cc_vec
-#                    self.max_qEI_val = max_qEI_val
-            else:    
+                    # Defining attributes for qEI
+                    self.Xspace = X
+                    self.est = est
+                    self.x_pending = x_pending
+            else:
+                print ('we are here :: other Acq than qEI')
                 for cand_acq_func in self.cand_acq_funcs_:
                     values = _gaussian_acquisition(
                         X=X, model=est, y_opt=np.min(self.yi),
@@ -642,11 +654,6 @@ class Optimizer(object):
                 self._next_x = self.space.inverse_transform(
                     next_x.reshape((1, -1)))[0]
                 
-                
-        # Defining attributes for qEI
-        self.Xspace = X
-        self.est = est
-        self.x_pending = x_pending
         
         # Pack results
         return create_result(self.Xi, self.yi, self.space, self.rng,

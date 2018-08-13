@@ -13,6 +13,7 @@ from .learning import ExtraTreesRegressor
 from .learning import GaussianProcessRegressor
 from .learning import GradientBoostingQuantileRegressor
 from .learning import RandomForestRegressor
+from .learning import LastLayerBayesianDeepNetRegressor
 from .learning.gaussian_process.kernels import ConstantKernel
 from .learning.gaussian_process.kernels import HammingKernel
 from .learning.gaussian_process.kernels import Matern
@@ -305,9 +306,9 @@ def cook_estimator(base_estimator, space=None, **kwargs):
     """
     if isinstance(base_estimator, str):
         base_estimator = base_estimator.upper()
-        if base_estimator not in ["GP", "ET", "RF", "GBRT", "DUMMY"]:
+        if base_estimator not in ["GP", "ET", "RF", "GBRT","LLBNN", "DUMMY"]:
             raise ValueError("Valid strings for the base_estimator parameter "
-                             " are: 'RF', 'ET', 'GP', 'GBRT' or 'DUMMY' not "
+                             " are: 'RF', 'ET', 'GP', 'GBRT', 'LLBNN' or 'DUMMY' not "
                              "%s." % base_estimator)
     elif not is_regressor(base_estimator):
         raise ValueError("base_estimator has to be a regressor.")
@@ -335,6 +336,24 @@ def cook_estimator(base_estimator, space=None, **kwargs):
             kernel=cov_amplitude * other_kernel,
             normalize_y=True, noise="gaussian",
             n_restarts_optimizer=2)
+    
+    elif base_estimator == "LLBNN":
+        if space is not None:
+            space = Space(space)
+            space = Space(normalize_dimensions(space.dimensions))
+            n_dims = space.transformed_n_dims
+            is_cat = space.is_categorical
+
+        else:
+            raise ValueError("Expected a Space instance, not None.")
+        
+        base_estimator = LastLayerBayesianDeepNetRegressor(random_state = 1,
+                 normalize_input = False, normalize_output = True,
+                 normalize_output_lr = False,
+                 num_epochs = 50, batch_size = 50,
+                 n_units_1 = 50, n_units_2 = 50, n_units_3 = 50,
+                 lr_intercept = False)
+        
     elif base_estimator == "RF":
         base_estimator = RandomForestRegressor(n_estimators=100,
                                                min_samples_leaf=3)

@@ -2,6 +2,7 @@ import numpy as np
 import warnings
 
 from scipy.stats import norm
+from .learning import GaussianProcessRegressor
 
 from rpy2.robjects.packages import STAP
 with open('qEI_call.r', 'r') as f:
@@ -143,6 +144,68 @@ def approx_qei(X, model, maxima, x_pending = None,
             ValueError ("No such sampling strategy exists ..")
         batches.append(b)
         mean, covar = model.predict(b, return_cov=True)
+        cc = qEI.qEI_approx(mean, covar, maxima)
+        cc_num = rpyn.ri2py(cc)
+        cc_vec[i] = cc_num
+    max_qEI_val = np.max(cc_vec)
+    max_qEI_val_ind = np.argmax(cc_vec)
+    best_batch = batches[max_qEI_val_ind]
+    
+    return best_batch, batches, cc_vec, max_qEI_val
+
+
+
+def approx_qei_mean_sd(X, model, maxima, x_pending = None,
+               num_sampled_points = 5,
+               num_batches_eval = 400,
+               strategy_batch_selection = 'random'):
+    """
+    Use Mickael Binois approximation to qEI function
+    This is used to calculate qEI score for batches 
+    
+    Parameters
+    ----------
+    * `X` [array-like, shape=(n_samples, n_features)]:
+        Values where the acquisition function should be computed.
+
+    * `model` [sklearn estimator that implements predict with ``return_std``]:
+        The fit estimator that approximates the function through the
+        method ``predict``.
+        It should have a ``return_std`` parameter that returns the standard
+        deviation.
+        
+     * `return_grad`: [boolean, optional]:
+        Whether or not to return the grad. Implemented only for the case where
+        ``X`` is a single sample.
+    
+     Returns
+    -------
+    * `values`: [array-like, shape=(len(num_batches_eval),)]:
+        qEI values for each batch
+    """
+    # Converting x_pending list to numpy array
+    if x_pending is not None:  
+        x_pending = np.array(x_pending)
+    
+    batches = []
+    cc_vec = np.zeros(num_batches_eval)
+    # Batch preparation
+    for i in range(num_batches_eval):   
+        if strategy_batch_selection == 'random':
+            rel_ind = np.random.choice(X.shape[0], num_sampled_points, replace=False)
+            b = X[rel_ind,:]
+            if x_pending is not None:
+                b = np.vstack([x_pending, b])
+        else:
+            ValueError ("No such sampling strategy exists ..")
+        batches.append(b)
+        if isinstance(model, GaussianProcessRegressor):        
+            mean, covar = model.predict(b, return_cov=True)
+        else:
+            mean, sd = model.predict(b, return_std = True)
+            samples = np.random.normal(mu, sigma, 1000)
+            print('TO DO')
+            #TODO
         cc = qEI.qEI_approx(mean, covar, maxima)
         cc_num = rpyn.ri2py(cc)
         cc_vec[i] = cc_num
