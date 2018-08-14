@@ -1,6 +1,7 @@
 import numpy as np
 import warnings
 
+import scipy.stats as stats
 from scipy.stats import norm
 from .learning import GaussianProcessRegressor
 
@@ -68,7 +69,7 @@ def _gaussian_acquisition(X, model, y_opt=None, acq_func="LCB",
             acq_vals = -func_and_grad[0]
             acq_grad = -func_and_grad[1]
         else:
-            acq_vals = -func_and_grad
+            acq_vals = -func_and_grad[0]
 
         if acq_func in ["EIps", "PIps"]:
 
@@ -118,9 +119,17 @@ def approx_qei(X, model, maxima, x_pending = None,
         It should have a ``return_std`` parameter that returns the standard
         deviation.
         
-     * `return_grad`: [boolean, optional]:
-        Whether or not to return the grad. Implemented only for the case where
-        ``X`` is a single sample.
+    * `maxima`[float, default 0]:
+        Previous minimum value which we would like to improve upon.
+    
+    * `num_sampled_points` [int, default 5]:
+        Number of points to sample in parallel
+        
+    * `num_batches_eval`[int, default 400]
+        Number of batches to evaluate
+    
+    * `strategy_batch_selection` [default 'random']:
+        Strategy for selection of elements in batches
     
      Returns
     -------
@@ -141,7 +150,7 @@ def approx_qei(X, model, maxima, x_pending = None,
             if x_pending is not None:
                 b = np.vstack([x_pending, b])
         else:
-            ValueError ("No such sampling strategy exists ..")
+            raise ValueError ("No such sampling strategy exists ..")
         batches.append(b)
         mean, covar = model.predict(b, return_cov=True)
         cc = qEI.qEI_approx(mean, covar, maxima)
@@ -153,15 +162,15 @@ def approx_qei(X, model, maxima, x_pending = None,
     
     return best_batch, batches, cc_vec, max_qEI_val
 
+def check_point(mu, std, selected_index, order):
+    z_score = abs(mu[order] - mu[selected_index])/std[selected_index]
+    
+    return (stats.norm.cdf(-z_score)*2) < 0.5
 
-
-def approx_qei_mean_sd(X, model, maxima, x_pending = None,
-               num_sampled_points = 5,
-               num_batches_eval = 400,
-               strategy_batch_selection = 'random'):
+def rui_ei(X, model, y_opt, x_pending = None,
+           num_sampled_points = 5):
     """
-    Use Mickael Binois approximation to qEI function
-    This is used to calculate qEI score for batches 
+    Parallel EI acquisition function used in Rui Shu Scalable BGO Deep Nets paper
     
     Parameters
     ----------
@@ -173,50 +182,49 @@ def approx_qei_mean_sd(X, model, maxima, x_pending = None,
         method ``predict``.
         It should have a ``return_std`` parameter that returns the standard
         deviation.
-        
-     * `return_grad`: [boolean, optional]:
-        Whether or not to return the grad. Implemented only for the case where
-        ``X`` is a single sample.
-    
-     Returns
+    * `y_opt` [float, default 0]:
+        Previous minimum value which we would like to improve upon.
+     
+    Returns
     -------
-    * `values`: [array-like, shape=(len(num_batches_eval),)]:
-        qEI values for each batch
+    best_batch
+    
     """
     # Converting x_pending list to numpy array
     if x_pending is not None:  
-        x_pending = np.array(x_pending)
+        raise ValueError("Not yet implemented with Rui's EI")
     
-    batches = []
-    cc_vec = np.zeros(num_batches_eval)
-    # Batch preparation
-    for i in range(num_batches_eval):   
-        if strategy_batch_selection == 'random':
-            rel_ind = np.random.choice(X.shape[0], num_sampled_points, replace=False)
-            b = X[rel_ind,:]
-            if x_pending is not None:
-                b = np.vstack([x_pending, b])
-        else:
-            ValueError ("No such sampling strategy exists ..")
-        batches.append(b)
-        if isinstance(model, GaussianProcessRegressor):        
-            mean, covar = model.predict(b, return_cov=True)
-        else:
-            mean, sd = model.predict(b, return_std = True)
-            samples = np.random.normal(mu, sigma, 1000)
-            print('TO DO')
-            #TODO
-        cc = qEI.qEI_approx(mean, covar, maxima)
-        cc_num = rpyn.ri2py(cc)
-        cc_vec[i] = cc_num
-    max_qEI_val = np.max(cc_vec)
-    max_qEI_val_ind = np.argmax(cc_vec)
-    best_batch = batches[max_qEI_val_ind]
+    # Calculate EI for grid points in the space
+    values, mu, std = gaussian_ei(X = X, model = model, y_opt = y_opt)
     
-    return best_batch, batches, cc_vec, max_qEI_val
+    if np.max(values) <= 0:
+        # If no good points, do pure exploration
+        sig_order = np.argsort(-std, axis = 0)
+        select_indices = sig_order[:num_sampled_points].tolist()
+    else:
+        ei_order = np.argsort(-1*values, axis = 0)
+        select_indices = [ei_order[0]]
+        for candidate in ei_order:
+            keep = True
+            for selected_index in select_indices:
+                keep = keep*check_point(mu, std, selected_index, candidate)
+            
+            if keep and (values[candidate] > 0):
+                select_indices.append(candidate)
+            if len(select_indices) == num_sampled_points:
+                break
+            if len(select_indices) < num_sampled_points:
+                print ("we are here :: 2")
+                print (str(len(select_indices)))
+                # If not enough good points, append with exploration
+                sig_order = np.argsort(-std, axis=0)
+                add_indices = sig_order[:(num_sampled_points-len(select_indices))].tolist()
+                select_indices.extend(add_indices)
+    best_batch = X[select_indices, :]
+    
+    return best_batch, select_indices, values, mu, std
     
     
-
 
 def gaussian_lcb(X, model, kappa=1.96, return_grad=False):
     """
@@ -332,7 +340,7 @@ def gaussian_pi(X, model, y_opt=0.0, xi=0.01, return_grad=False):
         else:
             mu, std = model.predict(X, return_std=True)
 
-    values = np.zeros_like(mu)
+    values, mu, std = np.zeros_like(mu)
     mask = std > 0
     improve = y_opt - xi - mu[mask]
     scaled = improve / std[mask]
@@ -433,4 +441,4 @@ def gaussian_ei(X, model, y_opt=0.0, xi=0.01, return_grad=False):
         grad = exploit_grad + explore_grad
         return values, grad
 
-    return values
+    return values, mu, std

@@ -348,9 +348,9 @@ def cook_estimator(base_estimator, space=None, **kwargs):
             raise ValueError("Expected a Space instance, not None.")
         
         base_estimator = LastLayerBayesianDeepNetRegressor(random_state = 1,
-                 normalize_input = False, normalize_output = True,
+                 normalize_input = False, normalize_output = False,
                  normalize_output_lr = False,
-                 num_epochs = 50, batch_size = 50,
+                 num_epochs = 3000, batch_size = 50,
                  n_units_1 = 50, n_units_2 = 50, n_units_3 = 50,
                  lr_intercept = False)
         

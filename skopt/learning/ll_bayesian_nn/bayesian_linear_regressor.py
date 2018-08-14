@@ -46,7 +46,7 @@ class BayesianARD(object):
         self.alpha = regressor.lambda_
 
         A = np.dot(Phi.T, Phi) / self.sigma ** 2. + self.alpha * np.eye(Phi.shape[1])
-        A = A + np.eye(A.shape[0])*1e-10
+        A = A + np.eye(A.shape[0])*1e-5
         L = scipy.linalg.cho_factor(A)
 
         self.m = scipy.linalg.cho_solve(L, np.dot(Phi.T, self.y) / self.sigma ** 2)  # The posterior mean of w

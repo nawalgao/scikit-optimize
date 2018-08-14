@@ -15,6 +15,7 @@ from sklearn.utils import check_random_state
 
 from ..acquisition import _gaussian_acquisition
 from ..acquisition import approx_qei
+from ..acquisition import rui_ei
 from ..acquisition import gaussian_acquisition_1D
 from ..learning import GaussianProcessRegressor
 from ..learning import LastLayerBayesianDeepNetRegressor
@@ -165,8 +166,8 @@ class Optimizer(object):
                              (",".join(allowed_acq_funcs), self.acq_func))
         
         if self.acq_func == 'qEI':
-            if base_estimator != 'gp':
-                raise ValueError('Right now, only GP estimator is supported with qEI')
+            if base_estimator not in ['gp', 'rf']:
+                raise ValueError('Right now, only GP and RF estimators are supported with qEI')
             print ('qEI aquisition function (parallel BGO) is still under development')
             print('-'*40)
             print ('Right now, it can only be used with sampling acq_optimizer')
@@ -439,6 +440,7 @@ class Optimizer(object):
             if not self.models:
                 raise RuntimeError("Random evaluations exhausted and no "
                                    "model has been fit.")
+            
             if self.acq_func == 'qEI':
                 if additional_acq_func_kwargs is None:
                     raise ValueError("qEI acquisition function needs extra arguments.")
@@ -466,6 +468,21 @@ class Optimizer(object):
                     self.points_to_eval = self.best_batch
             
                 return self.space.inverse_transform(self.points_to_eval)
+            
+            elif self.acq_func == 'RuiEI':
+                print ('we are here :: 1')
+                if additional_acq_func_kwargs is None:
+                    raise ValueError("RuiEI acquisition function needs extra arguments.")
+                num_sampled_points = additional_acq_func_kwargs['num_sampled_points']
+                r = rui_ei(X = self.Xspace, model = self.est,
+                                    y_opt = np.min(self.yi),
+                                    x_pending = self.x_pending,
+                                    num_sampled_points = num_sampled_points)
+                
+                self.best_batch = self.space.inverse_transform(r[0])
+                
+                return  r
+            
             
             else:
                 next_x = self._next_x
@@ -590,9 +607,9 @@ class Optimizer(object):
 
             self.next_xs_ = []
             
-            if self.acq_func == 'qEI':
-                    print ('we are here :: qEI')
-                    print ('When tell() is called with qEI aquisition function',
+            if (self.acq_func == 'qEI') or (self.acq_func == 'RuiEI'):
+                    print ('we are here :: qEI or RuiEI')
+                    print ('When tell() is called with qEI or RuiEI aquisition function',
                            ',we are just fitting the model and nothing more.')
                     # Defining attributes for qEI
                     self.Xspace = X

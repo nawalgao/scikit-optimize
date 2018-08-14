@@ -50,6 +50,33 @@ def _return_std(X, trees, predictions, min_variance):
     std = std ** 0.5
     return std
 
+def get_covar_mat(X, trees):
+    """
+    Get covariance matrix associated with given RF
+    
+    Parameters
+    ----------
+    * `X` [array-like, shape=(n_samples, n_features)]:
+        Input data.
+
+    * `trees` [list, shape=(n_estimators,)]:
+        List of fit sklearn trees as obtained from the ``estimators_``
+        attribute of a fit RandomForestRegressor or ExtraTreesRegressor.
+   
+    Returns
+    -------
+    * `covar` [array-like, shape=(n_samples, n_samples)]:
+    """
+    pred_mat = np.zeros(shape = (X.shape[0], len(trees)))
+    for i, tree in enumerate(trees):
+        pred_tree = tree.predict(X)
+        pred_mat[:,i] = pred_tree 
+    cov_mat = np.cov(pred_mat)
+    
+    return cov_mat
+        
+        
+    
 
 class RandomForestRegressor(_sk_RandomForestRegressor):
     """
@@ -202,7 +229,7 @@ class RandomForestRegressor(_sk_RandomForestRegressor):
             n_jobs=n_jobs, random_state=random_state,
             verbose=verbose, warm_start=warm_start)
 
-    def predict(self, X, return_std=False):
+    def predict(self, X, return_std=False, return_cov = False):
         """Predict continuous output for X.
 
         Parameters
@@ -232,6 +259,11 @@ class RandomForestRegressor(_sk_RandomForestRegressor):
                     % self.criterion)
             std = _return_std(X, self.estimators_, mean, self.min_variance)
             return mean, std
+        
+        if return_cov:
+            cov_mat = get_covar_mat(X, self.estimators_)
+            return mean, cov_mat
+            
         return mean
 
 
@@ -386,7 +418,7 @@ class ExtraTreesRegressor(_sk_ExtraTreesRegressor):
             n_jobs=n_jobs, random_state=random_state,
             verbose=verbose, warm_start=warm_start)
 
-    def predict(self, X, return_std=False):
+    def predict(self, X, return_std=False, return_cov = False):
         """
         Predict continuous output for X.
 
@@ -416,6 +448,11 @@ class ExtraTreesRegressor(_sk_ExtraTreesRegressor):
                     "Expected impurity to be 'mse', got %s instead"
                     % self.criterion)
             std = _return_std(X, self.estimators_, mean, self.min_variance)
-            return mean, std
-
+            
+            return mean, std 
+        
+        if return_cov:
+            cov_mat = get_covar_mat(X, self.estimators_)
+            return mean, cov_mat
+            
         return mean
