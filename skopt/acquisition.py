@@ -153,10 +153,15 @@ def approx_qei(X, model, maxima, x_pending = None,
             raise ValueError ("No such sampling strategy exists ..")
         batches.append(b)
         mean, covar = model.predict(b, return_cov=True)
+        #print ('covar')
+        #print(np.isnan(covar).any())
         cc = qEI.qEI_approx(mean, covar, maxima)
         cc_num = rpyn.ri2py(cc)
         cc_vec[i] = cc_num
-    max_qEI_val = np.max(cc_vec)
+    #print(cc_vec)
+    max_qEI_val = np.nanmax(cc_vec)
+    print('max')
+    print(max_qEI_val)
     max_qEI_val_ind = np.argmax(cc_vec)
     best_batch = batches[max_qEI_val_ind]
     
