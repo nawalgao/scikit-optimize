@@ -4,7 +4,7 @@ from keras.layers import Dense
 from keras.models import Model
 #import sys
 #sys.path.append('../')
-from .normalization import zero_mean_unit_var_normalization
+from .normalization import zero_mean_unit_var_normalization, zero_mean_unit_var_unnormalization
 
 
 class NeuralNet(object):
@@ -107,9 +107,7 @@ class NeuralNet(object):
         if self.normalize_input:
             X_test = zero_mean_unit_var_normalization(X_test)[0]
         pred = self.nn_model.predict(X_test)
-        pred = normalization.zero_mean_unit_var_unnormalization(pred,
-                                                                self.ynorm_mean,
-                                                                self.ynorm_sd )
+        pred = zero_mean_unit_var_unnormalization(pred, self.ynorm_mean, self.ynorm_sd )
         
         return pred
         

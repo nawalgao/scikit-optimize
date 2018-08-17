@@ -19,6 +19,7 @@ from ..acquisition import rui_ei
 from ..acquisition import gaussian_acquisition_1D
 from ..learning import GaussianProcessRegressor
 from ..learning import LastLayerBayesianDeepNetRegressor
+from ..learning import NeuralNetworksDropoutRegressor
 from ..space import Categorical
 from ..space import Space
 from ..utils import check_x_in_space
@@ -150,7 +151,8 @@ class Optimizer(object):
                  acq_func="gp_hedge",
                  acq_optimizer="auto",
                  random_state=None, acq_func_kwargs=None,
-                 acq_optimizer_kwargs=None):
+                 acq_optimizer_kwargs=None,
+                 base_estimator_kwargs=None):
 
         self.rng = check_random_state(random_state)
 
@@ -208,9 +210,26 @@ class Optimizer(object):
 
         # build base_estimator if doesn't exist
         if isinstance(base_estimator, str):
-            base_estimator = cook_estimator(
-                base_estimator, space=dimensions,
-                random_state=self.rng.randint(0, np.iinfo(np.int32).max))
+            if base_estimator == 'llbnn':
+                if base_estimator_kwargs is None:
+                    raise OSError("LLBNN base estimator needs additional parameters") 
+                normalize_output = base_estimator_kwargs['normalize_output']
+                num_epochs = base_estimator_kwargs['normalize_output']
+                batch_size = base_estimator_kwargs['batch_size']
+                n_units_1 = base_estimator_kwargs['n_units_1']
+                n_units_2 = base_estimator_kwargs['n_units_2']
+                n_units_3 = base_estimator_kwargs['n_units_3']
+                base_estimator = cook_estimator(base_estimator, space=dimensions,
+                                                random_state=self.rng.randint(0, np.iinfo(np.int32).max),
+                                                normalize_output = normalize_output,
+                                                num_epochs = num_epochs,
+                                                batch_size = batch_size,
+                                                n_units_1 = n_units_1,
+                                                n_units_2 = n_units_2,
+                                                n_units_3 = n_units_3)
+            else:
+                base_estimator = cook_estimator(base_estimator, space=dimensions,
+                                                random_state=self.rng.randint(0, np.iinfo(np.int32).max))
 
         # check if regressor
         if not is_regressor(base_estimator) and base_estimator is not None:
@@ -262,6 +281,9 @@ class Optimizer(object):
             dimensions = normalize_dimensions(dimensions)
         
         if isinstance(self.base_estimator_, LastLayerBayesianDeepNetRegressor):
+            dimensions = normalize_dimensions(dimensions)
+        
+        if isinstance(self.base_estimator_, NeuralNetworksDropoutRegressor):
             dimensions = normalize_dimensions(dimensions)
         
         
@@ -379,14 +401,15 @@ class Optimizer(object):
             return self._ask(additional_acq_func_kwargs)
             
         elif self.acq_func == 'RuiEI':
-            print ('This is going to find the maximum of the concerned objective,',
-                   'unlike scikit optimize.')
-            print ('Scikit optimize finds the minimum of objective function.')
+            print ("This is going to find the maximum of the concerned objective,",
+                   "unlike scikit optimize.")
+            print ("Scikit optimize finds the minimum of objective function.")
               
             return self._ask(additional_acq_func_kwargs)
         
         else:
-      
+            if additional_acq_func_kwargs is not None:
+                raise OSError("Only qEI and RuiEI need additional args not the skopt default ones.")
             # Copy of the optimizer is made in order to manage the
             # deletion of points with "lie" objective (the copy of
             # oiptimizer is simply discarded)
@@ -470,7 +493,6 @@ class Optimizer(object):
                 return self.space.inverse_transform(self.points_to_eval)
             
             elif self.acq_func == 'RuiEI':
-                print ('we are here :: 1')
                 if additional_acq_func_kwargs is None:
                     raise ValueError("RuiEI acquisition function needs extra arguments.")
                 num_sampled_points = additional_acq_func_kwargs['num_sampled_points']
@@ -481,7 +503,8 @@ class Optimizer(object):
                 
                 self.best_batch = self.space.inverse_transform(r[0])
                 
-                return  r
+                #return  r
+                return self.best_batch
             
             
             else:
@@ -616,6 +639,7 @@ class Optimizer(object):
                     self.est = est
                     self.x_pending = x_pending
             else:
+                self.Xspace = X # Delete once debug is complete
                 print ('we are here :: other Acq than qEI')
                 for cand_acq_func in self.cand_acq_funcs_:
                     values = _gaussian_acquisition(

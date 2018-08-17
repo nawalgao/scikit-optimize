@@ -219,8 +219,6 @@ def rui_ei(X, model, y_opt, x_pending = None,
             if len(select_indices) == num_sampled_points:
                 break
             if len(select_indices) < num_sampled_points:
-                print ("we are here :: 2")
-                print (str(len(select_indices)))
                 # If not enough good points, append with exploration
                 sig_order = np.argsort(-std, axis=0)
                 add_indices = sig_order[:(num_sampled_points-len(select_indices))].tolist()
